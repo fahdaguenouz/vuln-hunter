@@ -262,36 +262,25 @@ Juice Shop exposes a weak password reset mechanism that allows account takeover 
 
 **Step 2** — Enter the admin's known email: `admin@juice-sh.op`
 
-**Step 3** — The security question is revealed: *"What is your favourite pet's name?"*
+**Step 3** — The security question is revealed: *"Mother's maiden name?"*
+**source code questions** -`https://raw.githubusercontent.com/juice-shop/juice-shop/v12.5.0/data/static/securityQuestions.yml`
+**source code** -`https://raw.githubusercontent.com/juice-shop/juice-shop/v20.0.0/data/static/users.yml`
 
-**Step 4** — The answer (`Zaya`) is embedded in the Juice Shop source code / challenge hints. Enter it.
+**Step 4** — The answer (`@xI98PxDO+06!`) is embedded in the Juice Shop source code / challenge hints. Enter it.
 
 **Step 5** — Set a new password and log in as admin.
 
-**JWT Secret Brute-Force (Alternative Attack)**
-
-The application signs JWTs with a weak, guessable secret (`secret`). Using `hashcat` or `jwt_tool`:
-
-```bash
-# Decode the JWT token from the login response
-python3 jwt_tool.py <token> -C -d /usr/share/wordlists/rockyou.txt
-# Found secret: "secret"
-# Forge an admin token:
-python3 jwt_tool.py <token> -T -S hs256 -p "secret"
-```
 
 #### Impact
-
 - Full account takeover of any user (including admin)
 - Bypass of all access controls
 - Data theft and privilege escalation
 
 #### Remediation
 
-1. **Strong security questions** — Use MFA or magic-link email flows instead of knowledge-based authentication.
-2. **Rate-limit password reset requests** — Prevent brute-force enumeration.
-3. **Use cryptographically strong JWT secrets** — Minimum 256-bit random secret; store in a secrets manager (e.g., HashiCorp Vault).
-4. **JWT expiry** — Enforce short-lived tokens with proper refresh token rotation.
+1. **Rate-limit password reset requests** — Prevent brute-force enumeration.
+2. **Use cryptographically strong JWT secrets** — Minimum 256-bit random secret; store in a secrets manager (e.g., HashiCorp Vault).
+3. **JWT expiry** — Enforce short-lived tokens with proper refresh token rotation.
 
 ---
 
@@ -310,6 +299,7 @@ IDOR occurs when an application exposes internal object references (e.g., databa
 **Scenario**: Accessing another user's shopping basket.
 
 **Step 1** — Log in as a regular user (e.g., `jim@juice-sh.op`).
+**search for security quetions** - `https://en.wikipedia.org/wiki/James_T._Kirk`
 
 **Step 2** — Add an item to your basket. Intercept the request:
 
@@ -354,10 +344,6 @@ The Juice Shop administration panel is accessible via a guessable URL without ne
 
 **Step 1** — Without any prior knowledge, run a directory brute-force scan:
 
-```bash
-gobuster dir -u http://localhost:3000 -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
-```
-
 **Step 2** — Output reveals: `/#/administration`
 
 **Step 3** — Navigate to `http://localhost:3000/#/administration`.
@@ -399,13 +385,7 @@ Sensitive credentials and API keys are leaked through publicly accessible files 
 curl http://localhost:3000/ftp/acquisitions.md
 ```
 
-The file contains confidential business strategy documents.
 
-**Step 3** — Inspect the minified JavaScript bundle (`main.js`) via browser DevTools → Sources. Search for `apiKey` or `secret`:
-
-```
-"authorization": "Bearer eyJ0e..."  # Hardcoded token fragment
-```
 
 #### Impact
 

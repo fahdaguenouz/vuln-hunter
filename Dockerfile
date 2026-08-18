@@ -1,5 +1,5 @@
 # ============================================================
-# VulnHunter — OWASP Juice Shop Docker Setup
+# VulnHunter — OWASP Juice Shop Docker Setup (v20 Compatible)
 # ============================================================
 # PURPOSE:
 #   Runs the intentionally vulnerable OWASP Juice Shop web app
@@ -12,39 +12,25 @@
 # ============================================================
 
 # --- Base image ---
-# Using the official Juice Shop image from Docker Hub.
 # INFRASTRUCTURE VULNERABILITY NOTE:
-#   Using 'latest' tag is a security anti-pattern in production —
-#   it prevents reproducible builds and may silently introduce
-#   breaking or insecure changes. In a hardened setup, pin to a
-#   specific digest (e.g., bkimminich/juice-shop@sha256:<digest>).
-FROM bkimminich/juice-shop:latest
+#   Pinned to a specific v20.x release to ensure reproducible builds 
+#   and mitigate the supply-chain risks of using the 'latest' tag.
+FROM bkimminich/juice-shop:v20.2.0
 
 # --- Metadata ---
 LABEL maintainer="VulnHunter Security Research"
 LABEL description="OWASP Juice Shop — intentionally vulnerable web app for security training"
-LABEL version="1.0"
+LABEL version="2.0"
 LABEL project="VulnHunter"
 
 # --- Expose application port ---
 # Juice Shop listens on port 3000 by default.
-# INFRASTRUCTURE VULNERABILITY NOTE:
-#   The app runs as root inside the container (upstream image default),
-#   which violates the principle of least privilege. In a hardened
-#   environment you would add:
-#       RUN addgroup -S juiceshop && adduser -S juiceshop -G juiceshop
-#       USER juiceshop
-#   However, changing the user here may conflict with the upstream
-#   image's startup scripts, so it is left as-is for this lab.
+# INFRASTRUCTURE VULNERABILITY NOTE (RESOLVED):
+#   In previous versions, the app ran as root. As of v20+, the image natively 
+#   utilizes a distroless environment and runs as a non-root user (USER 65532), 
+#   successfully fulfilling the principle of least privilege out of the box.
 EXPOSE 3000
 
-# --- Health check ---
-# Verifies the application is responding before marking the
-# container healthy. Useful when composing services.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD wget -qO- http://localhost:3000 || exit 1
-
-# --- Start application ---
-# The upstream image already defines CMD/ENTRYPOINT; this is kept
-# explicit for clarity and auditability.
-CMD ["node", "/juice-shop/build/app.js"]
+# Note: The custom CMD and HEALTHCHECK overrides have been removed as they 
+# rely on shell utilities (like wget) which do not exist in the modern 
+# distroless base image used in v20+.
