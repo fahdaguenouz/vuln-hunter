@@ -30,7 +30,7 @@
    - [3. Broken Authentication](#3-broken-authentication)
    - [4. Insecure Direct Object Reference (IDOR)](#4-insecure-direct-object-reference-idor)
    - [5. Security Misconfiguration — Exposed Admin Panel](#5-security-misconfiguration--exposed-admin-panel)
-   - [6. Sensitive Data Exposure — API Key Leak](#6-sensitive-data-exposure--api-key-leak)
+   - [6. Sensitive Data Exposure — Exposed Metrics](#6-sensitive-data-exposure--exposed-metrics)
    - [7. Broken Access Control — Admin Basket Manipulation](#7-broken-access-control--admin-basket-manipulation)
    - [8. XML External Entity (XXE) Injection](#8-xml-external-entity-xxe-injection)
    - [9. Path Traversal — FTP Directory Listing](#9-path-traversal--ftp-directory-listing)
@@ -97,12 +97,12 @@ http://localhost:3000
 
 > This section addresses the **Bonus objective** — analyzing the Dockerfile and container setup for infrastructure-level security issues.
 
-The OWASP Juice Shop Docker image (`bkimminich/juice-shop:latest`) was analyzed for infrastructure vulnerabilities:
+The OWASP Juice Shop Docker image (v20) was analyzed for infrastructure vulnerabilities:
 
 | # | Issue | Severity | CWE |
 |---|-------|----------|-----|
 | 1 | **Unpinned `latest` tag** — No reproducibility; supply-chain risk | Medium | CWE-829 |
-| 2 | **Process runs as root** — Container process has UID 0 | High | CWE-250 |
+| 2 | **Process runs as root** — Container process has UID 0 (Resolved in v20+) | High | CWE-250 |
 | 3 | **No read-only filesystem** — Container FS is writable | Medium | CWE-732 |
 | 4 | **No resource limits** — No CPU/memory caps (DoS risk) | Medium | CWE-400 |
 | 5 | **Port 3000 directly exposed** — No reverse proxy or TLS | High | CWE-319 |
@@ -112,12 +112,12 @@ The OWASP Juice Shop Docker image (`bkimminich/juice-shop:latest`) was analyzed 
 ### Recommended Hardening (Dockerfile)
 
 ```dockerfile
-# Pin to a specific image digest for reproducibility
-FROM bkimminich/juice-shop@sha256:<verified-digest>
+# Pin to a specific image digest or version tag for reproducibility
+FROM bkimminich/juice-shop:v20.2.0
 
-# Drop privileges
-RUN addgroup -S juiceshop && adduser -S juiceshop -G juiceshop
-USER juiceshop
+# As of v20+, the image natively utilizes a distroless environment 
+# and runs as a non-root user (USER 65532). No need to manually add groups/users.
+# (Previous versions required manual privilege dropping)
 
 # Use a reverse proxy (nginx) with TLS termination in production
 # Set resource limits at the docker run / compose level:
@@ -206,9 +206,9 @@ XSS allows attackers to inject client-side scripts into web pages viewed by othe
 
 #### How It Was Exploited
 
-**Reflected XSS — Search Field**
+**DOM-based XSS — Search Field**
 
-**Step 1** — Navigate to the search bar at `http://localhost:3000`.
+**Step 1** — Navigate to the search bar at `http://localhost:3000/#/search?q=`.
 
 **Step 2** — Enter the following payload and press Enter:
 
@@ -216,7 +216,7 @@ XSS allows attackers to inject client-side scripts into web pages viewed by othe
 <iframe src="javascript:alert('XSS')">
 ```
 
-**Step 3** — The browser executes the script and renders an alert popup, confirming script execution in the victim's browser context.
+**Step 3** — The browser executes the script and renders an alert popup, confirming script execution in the victim's browser context. Angular processes the URL parameter and renders it without proper sanitization.
 
 **DOM-based XSS — Track Order Page**
 
@@ -263,7 +263,7 @@ Juice Shop exposes a weak password reset mechanism that allows account takeover 
 **Step 2** — Enter the admin's known email: `admin@juice-sh.op`
 
 **Step 3** — The security question is revealed: *"Mother's maiden name?"*
-**source code questions** -`https://raw.githubusercontent.com/juice-shop/juice-shop/v12.5.0/data/static/securityQuestions.yml`
+**source code questions** -`https://raw.githubusercontent.com/juice-shop/juice-shop/v20.0.0/data/static/securityQuestions.yml`
 **source code** -`https://raw.githubusercontent.com/juice-shop/juice-shop/v20.0.0/data/static/users.yml`
 
 **Step 4** — The answer (`@xI98PxDO+06!`) is embedded in the Juice Shop source code / challenge hints. Enter it.
@@ -365,40 +365,37 @@ The Juice Shop administration panel is accessible via a guessable URL without ne
 
 ---
 
-### 6. Sensitive Data Exposure — API Key Leak
+### 6. Sensitive Data Exposure — Exposed Metrics
 
-**OWASP Category**: A02:2021 — Cryptographic Failures  
+**OWASP Category**: A05:2021 — Security Misconfiguration  
 **Severity**: 🟡 Medium  
-**CWE**: CWE-312
+**CWE**: CWE-200
 
 #### Description
 
-Sensitive credentials and API keys are leaked through publicly accessible files and JavaScript source bundles.
+Prometheus metrics are exposed publicly without authentication, revealing internal application state and performance data.
 
 #### How It Was Exploited
 
-**Step 1** — Navigate to `http://localhost:3000/ftp/` — an exposed FTP directory listing is returned.
+**Step 1** — Navigate to `http://localhost:3000/metrics`.
 
-**Step 2** — Download `acquisitions.md`:
+**Step 2** — The application returns a full dump of internal Prometheus metrics.
 
 ```bash
-curl http://localhost:3000/ftp/acquisitions.md
+curl http://localhost:3000/metrics | head -n 10
 ```
-
-
 
 #### Impact
 
-- Business intelligence / insider information leak
-- Hardcoded tokens can be used to impersonate services
-- Regulatory violations (GDPR) if personal data is included
+- Business intelligence leak (e.g., number of registered users, orders placed, active sessions)
+- Insight into internal infrastructure (Node.js version, memory usage, API endpoints)
+- Helpful for an attacker to monitor the success of a denial-of-service (DoS) attack.
 
 #### Remediation
 
-1. **Remove public directory listing** — Disable Apache/Nginx `autoindex` directives.
-2. **Never hardcode secrets in client-side code** — Use server-side environment variables and secret managers.
-3. **File access controls** — Serve only files explicitly needed by users.
-4. **Secret scanning CI/CD** — Integrate tools like `truffleHog` or `gitleaks` into the pipeline.
+1. **Restrict Access** — Only allow internal network IP addresses to access the `/metrics` endpoint.
+2. **Require Authentication** — Require a valid JWT or Basic Auth token to view metrics.
+3. **Run on a separate port** — Bind the metrics endpoint to a separate internal port not exposed to the public internet.
 
 ---
 
@@ -449,25 +446,39 @@ Authorization: Bearer <user_jwt>
 
 #### Description
 
-The complaint submission endpoint accepts XML input and processes it without disabling external entity resolution, enabling XXE attacks.
+The B2B order submission endpoint accepts XML input and processes it without disabling external entity resolution, enabling XXE attacks.
 
 #### How It Was Exploited
 
-**Step 1** — Navigate to `http://localhost:3000/#/complain`. This form accepts file uploads.
+**Step 1** — Log in to obtain a valid JWT token.
 
-**Step 2** — Craft a malicious XML file (`evil.xml`):
+**Step 2** — Craft a malicious XML file (`evil.xml`) targeting the B2B API endpoint:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE foo [
   <!ENTITY xxe SYSTEM "file:///etc/passwd">
 ]>
-<complaint>
-  <message>&xxe;</message>
-</complaint>
+<b2bOrder>
+  <orderLines>
+    <orderLine>
+      <productId>1</productId>
+      <quantity>&xxe;</quantity>
+    </orderLine>
+  </orderLines>
+</b2bOrder>
 ```
 
-**Step 3** — Upload the file. The server processes the XML and includes the contents of `/etc/passwd` in the response or error output.
+**Step 3** — Submit the payload using the `Authorization` header:
+
+```bash
+curl -X POST http://localhost:3000/b2b/v2/orders \
+  -H "Content-Type: application/xml" \
+  -H "Authorization: Bearer <your_jwt_here>" \
+  -d @evil.xml
+```
+
+The server processes the XML and includes the contents of `/etc/passwd` in the response or error output.
 
 #### Impact
 
