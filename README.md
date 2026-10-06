@@ -299,8 +299,11 @@ IDOR occurs when an application exposes internal object references (e.g., databa
 **Scenario**: Accessing another user's shopping basket.
 
 **Step 1** — Log in as a regular user (e.g., `jim@juice-sh.op`).
-**search for security quetions** - `https://en.wikipedia.org/wiki/James_T._Kirk`
 
+**search for security quetions** - `https://en.wikipedia.org/wiki/James_T._Kirk`
+```
+Samuel
+```
 **Step 2** — Add an item to your basket. Intercept the request:
 
 ```http
