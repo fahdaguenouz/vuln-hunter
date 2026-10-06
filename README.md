@@ -97,8 +97,6 @@ Open your browser and navigate to:
 http://localhost:3000
 ```
 
-> **Tip**: Use Firefox with the **FoxyProxy** extension alongside **Burp Suite** (or **OWASP ZAP**) as an intercepting proxy on `127.0.0.1:8080` for full request manipulation.
-
 ---
 
 ## Infrastructure Vulnerability Analysis ⭐ Bonus
