@@ -559,7 +559,6 @@ As a Security Consultant / Penetration Tester, the following professional standa
 
 <div align="center">
 
-Made with ❤️ for ethical security research.  
 **Never hack what you don't own or have permission to test.**
 
 </div>
